@@ -191,6 +191,11 @@ public class KThread {
 	Lib.assertTrue(toBeDestroyed == null);
 	toBeDestroyed = currentThread;
 
+	if (currentThread.joinQueue != null) {
+	    KThread thread = currentThread.joinQueue.nextThread();
+	    if (thread != null)
+		thread.ready();
+	}
 
 	currentThread.status = statusFinished;
 	
@@ -276,7 +281,27 @@ public class KThread {
 	Lib.debug(dbgThread, "Joining to thread: " + toString());
 
 	Lib.assertTrue(this != currentThread);
-
+	
+	boolean intStatus = Machine.interrupt().disable();
+	
+	if (status == statusFinished) {
+	    Machine.interrupt().restore(intStatus);
+	    return;
+	}
+	
+	if (joinCalled) {
+	    Lib.assertTrue(false, "join() called multiple times on the same thread");
+	}
+	joinCalled = true;
+	
+	if (joinQueue == null)
+	    joinQueue = ThreadedKernel.scheduler.newThreadQueue(false);
+	
+	joinQueue.waitForAccess(currentThread);
+	
+	KThread.sleep();
+	
+	Machine.interrupt().restore(intStatus);
     }
 
     /**
@@ -444,4 +469,8 @@ public class KThread {
     private static KThread currentThread = null;
     private static KThread toBeDestroyed = null;
     private static KThread idleThread = null;
+
+    private ThreadQueue joinQueue = null;
+    
+    private boolean joinCalled = false;
 }
