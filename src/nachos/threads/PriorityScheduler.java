@@ -5,6 +5,7 @@ import nachos.machine.*;
 import java.util.TreeSet;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 
 /**
  * A scheduler that chooses threads based on their priorities.
@@ -128,6 +129,8 @@ public class PriorityScheduler extends Scheduler {
     protected class PriorityQueue extends ThreadQueue {
 	PriorityQueue(boolean transferPriority) {
 	    this.transferPriority = transferPriority;
+            this.waitQueue = new LinkedList<ThreadState>();
+            this.resourceHolder = null;
 	}
 
 	public void waitForAccess(KThread thread) {
@@ -142,8 +145,26 @@ public class PriorityScheduler extends Scheduler {
 
 	public KThread nextThread() {
 	    Lib.assertTrue(Machine.interrupt().disabled());
-	    // implement me
-	    return null;
+	    
+	    ThreadState nextState = pickNextThread();
+            
+            if (nextState == null)
+                return null;
+            
+            // If there's a current resource holder, they no longer hold this resource
+            if (resourceHolder != null) {
+                resourceHolder.resourcesHeld.remove(this);
+                resourceHolder.invalidateCache();
+            }
+            
+            // Remove the chosen thread from wait queue
+            waitQueue.remove(nextState);
+            
+            // Set this thread as the resource holder
+            resourceHolder = nextState;
+            nextState.acquire(this);
+            
+            return nextState.thread;
 	}
 
 	/**
@@ -154,13 +175,40 @@ public class PriorityScheduler extends Scheduler {
 	 *		return.
 	 */
 	protected ThreadState pickNextThread() {
-	    // implement me
-	    return null;
+	    if (waitQueue.isEmpty())
+                return null;
+                
+            // Find thread with highest effective priority
+            ThreadState highestPriorityThread = null;
+            int highestPriority = priorityMinimum - 1;
+            long earliestTime = Long.MAX_VALUE;
+            
+            for (ThreadState state : waitQueue) {
+                int effectivePriority = state.getEffectivePriority();
+                
+                if (effectivePriority > highestPriority) {
+                    highestPriorityThread = state;
+                    highestPriority = effectivePriority;
+                    earliestTime = state.waitTime;
+                } else if (effectivePriority == highestPriority && 
+                           state.waitTime < earliestTime) {
+                    // If same priority, choose the one waiting longest
+                    highestPriorityThread = state;
+                    earliestTime = state.waitTime;
+                }
+            }
+            
+            return highestPriorityThread;
 	}
 	
 	public void print() {
 	    Lib.assertTrue(Machine.interrupt().disabled());
-	    // implement me (if you want)
+            System.out.println("Queue Contents:");
+            for (ThreadState state : waitQueue) {
+                System.out.println("  Thread: " + state.thread.getName() + 
+                                   ", Priority: " + state.getPriority() +
+                                   ", Effective: " + state.getEffectivePriority());
+            }
 	}
 
 	/**
@@ -168,6 +216,12 @@ public class PriorityScheduler extends Scheduler {
 	 * threads to the owning thread.
 	 */
 	public boolean transferPriority;
+        
+        // The list of threads waiting for this resource
+        public LinkedList<ThreadState> waitQueue;
+        
+        // The thread that currently holds this resource
+        public ThreadState resourceHolder;
     }
 
     /**
@@ -187,7 +241,18 @@ public class PriorityScheduler extends Scheduler {
 	public ThreadState(KThread thread) {
 	    this.thread = thread;
 	    
-	    setPriority(priorityDefault);
+            this.priority = priorityDefault;
+            this.cachedPriority = priorityDefault;
+            this.cachedPriorityValid = true;
+            
+            // Resources this thread is waiting on
+            this.waitForResource = null;
+            
+            // Resources this thread currently holds
+            this.resourcesHeld = new LinkedList<PriorityQueue>();
+            
+            // Time when this thread started waiting (for FIFO ordering of same-priority threads)
+            this.waitTime = Machine.timer().getTime();
 	}
 
 	/**
@@ -205,9 +270,62 @@ public class PriorityScheduler extends Scheduler {
 	 * @return	the effective priority of the associated thread.
 	 */
 	public int getEffectivePriority() {
-	    // implement me
-	    return priority;
+            if (cachedPriorityValid)
+                return cachedPriority;
+            
+            // Start with the base priority
+            cachedPriority = priority;
+            
+            // If we're not holding any resources that can receive donation, we're done
+            if (resourcesHeld.isEmpty()) {
+                cachedPriorityValid = true;
+                return cachedPriority;
+            }
+            
+            // Use a HashSet to track visited nodes and avoid cycles
+            HashSet<ThreadState> visited = new HashSet<ThreadState>();
+            visited.add(this);
+            
+            // Process all resources this thread holds
+            for (PriorityQueue pq : resourcesHeld) {
+                // Only consider resources that transfer priority and have waiters
+                if (pq.transferPriority && !pq.waitQueue.isEmpty()) {
+                    for (ThreadState waiter : pq.waitQueue) {
+                        if (!visited.contains(waiter)) {
+                            int donatedPriority = waiter.getDonatedPriority(visited);
+                            cachedPriority = Math.max(cachedPriority, donatedPriority);
+                        }
+                    }
+                }
+            }
+            
+            cachedPriorityValid = true;
+            return cachedPriority;
 	}
+        
+        /**
+         * Get the priority this thread would donate, considering its own priority
+         * and any priority donated to it.
+         */
+        private int getDonatedPriority(HashSet<ThreadState> visited) {
+            visited.add(this);
+            
+            // Start with this thread's priority
+            int donated = priority;
+            
+            // If this thread holds resources, it might receive donations
+            for (PriorityQueue pq : resourcesHeld) {
+                if (pq.transferPriority && !pq.waitQueue.isEmpty()) {
+                    for (ThreadState waiter : pq.waitQueue) {
+                        if (!visited.contains(waiter)) {
+                            donated = Math.max(donated, waiter.getDonatedPriority(visited));
+                        }
+                    }
+                }
+            }
+            
+            return donated;
+        }
 
 	/**
 	 * Set the priority of the associated thread to the specified value.
@@ -220,8 +338,26 @@ public class PriorityScheduler extends Scheduler {
 	    
 	    this.priority = priority;
 	    
-	    // implement me
+            // Priority changed, invalidate our cached priority
+            invalidateCache();
 	}
+        
+        /**
+         * Invalidate the cached effective priority for this thread and
+         * any threads that this thread is donating priority to.
+         */
+        private void invalidateCache() {
+            if (cachedPriorityValid) {
+                cachedPriorityValid = false;
+                
+                // If we're waiting for a resource that transfers priority,
+                // we need to invalidate the resource holder's cache
+                if (waitForResource != null && waitForResource.transferPriority && 
+                    waitForResource.resourceHolder != null) {
+                    waitForResource.resourceHolder.invalidateCache();
+                }
+            }
+        }
 
 	/**
 	 * Called when <tt>waitForAccess(thread)</tt> (where <tt>thread</tt> is
@@ -236,7 +372,28 @@ public class PriorityScheduler extends Scheduler {
 	 * @see	nachos.threads.ThreadQueue#waitForAccess
 	 */
 	public void waitForAccess(PriorityQueue waitQueue) {
-	    // implement me
+            // If we were holding this resource, we need to release it first
+            if (resourcesHeld.contains(waitQueue)) {
+                resourcesHeld.remove(waitQueue);
+                if (waitQueue.resourceHolder == this) {
+                    waitQueue.resourceHolder = null;
+                }
+            }
+            
+            // Record that we're waiting for this resource
+            this.waitForResource = waitQueue;
+            
+            // Update wait time for FIFO ordering of same-priority threads
+            this.waitTime = Machine.timer().getTime();
+            
+            // Add to the wait queue
+            waitQueue.waitQueue.add(this);
+            
+            // If there's a resource holder and this queue transfers priority,
+            // invalidate the holder's cached priority for donation
+            if (waitQueue.transferPriority && waitQueue.resourceHolder != null) {
+                waitQueue.resourceHolder.invalidateCache();
+            }
 	}
 
 	/**
@@ -250,12 +407,41 @@ public class PriorityScheduler extends Scheduler {
 	 * @see	nachos.threads.ThreadQueue#nextThread
 	 */
 	public void acquire(PriorityQueue waitQueue) {
-	    // implement me
-	}	
+            // If we were in the wait queue, we're not anymore
+            if (this.waitForResource == waitQueue) {
+                this.waitForResource = null;
+            }
+            
+            // Add the resource to our held resources if not already there
+            if (!resourcesHeld.contains(waitQueue)) {
+                resourcesHeld.add(waitQueue);
+            }
+            
+            // Set ourselves as the holder of this resource
+            waitQueue.resourceHolder = this;
+            
+            // Invalidate our cached priority as we may receive donations
+            invalidateCache();
+	}
 
 	/** The thread with which this object is associated. */	   
 	protected KThread thread;
 	/** The priority of the associated thread. */
 	protected int priority;
+        
+        /** The effective priority (including donations) */
+        protected int cachedPriority;
+        
+        /** Whether the cached priority is valid */
+        protected boolean cachedPriorityValid;
+        
+        /** Time when this thread started waiting */
+        protected long waitTime;
+        
+        /** The queue this thread is waiting on (if any) */
+        protected PriorityQueue waitForResource;
+        
+        /** The resources this thread currently holds */
+        protected LinkedList<PriorityQueue> resourcesHeld;
     }
 }
