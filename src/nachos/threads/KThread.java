@@ -192,6 +192,7 @@ public class KThread {
 	toBeDestroyed = currentThread;
 
 	if (currentThread.joinQueue != null) {
+	    // Wake up a waiting thread if any
 	    KThread thread = currentThread.joinQueue.nextThread();
 	    if (thread != null)
 		thread.ready();
@@ -294,8 +295,11 @@ public class KThread {
 	}
 	joinCalled = true;
 	
-	if (joinQueue == null)
-	    joinQueue = ThreadedKernel.scheduler.newThreadQueue(false);
+	if (joinQueue == null) {
+	    joinQueue = ThreadedKernel.scheduler.newThreadQueue(true);
+	    // The joined thread must acquire the queue to enable priority donation
+	    joinQueue.acquire(this);
+	}
 	
 	joinQueue.waitForAccess(currentThread);
 	
