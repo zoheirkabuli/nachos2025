@@ -1,147 +1,128 @@
-# Nachos Project 3: Multiprogramming & Virtual Memory Implementation Guide
+# Nachos Project 3: System Call and Virtual Memory Implementation Guide
 
-## Overview
+## 1. Overview
 
-This project focuses on implementing multiprogramming support for Nachos, allowing multiple user processes to run concurrently. You will implement system calls, memory management, and process control mechanisms.
+The primary goal of this project is to extend the Nachos operating system simulator to support multiprogramming by implementing system calls and a virtual memory system within the `nachos/userprog` directory[cite: 6]. You will modify existing Java files to add this functionality[cite: 7, 8, 15].
 
-The main tasks include:
-1. Implementing file system calls
-2. Adding support for multiprogramming
-3. Building process management system calls
+## 2. Environment and Submission
 
-## Environment Setup
+- **Testing Environment:** Use the Docker container `papama/cs3053:p3` for testing your implementation.
+- **Submission:** Upload a zipped `userprog` folder containing all modified Java source files and a two-page PDF report to Harvey[cite: 10, 13].
+- **Report Format:** Times New Roman, fontsize 11, before and after spacing 0. Include descriptions of your approach for each task and feedback on the project[cite: 11, 12].
 
-- Run the project in the `proj2` directory
-- Compile test programs with `make test`
-- Run the basic Nachos system with `nachos -d ma`
-- Test specific programs with `nachos -x PROGNAME.coff`
-- Use Docker container `papama/cs3053:p3` for autograding
+## 3. Core Files for Modification
 
-## Key Implementation Requirements
+Modify the following files within the `nachos/userprog` directory:
 
-### 1. Memory Management
+### 3.1. `UserKernel.java` [cite: 6, 21]
 
-- **Total Memory**: 64 physical pages of 1024 bytes each (64KB total)
-- **Implementation in `UserKernel.java`**:
-  - Define and maintain a list of free physical pages (LinkedList<Integer>)
-  - Use synchronization when accessing shared resources
-  - Valid physical page numbers (ppn) range from 0-63
-  - Allocate pages efficiently (use gaps in memory, not just contiguous blocks)
+- **Purpose:** Manages simulated MIPS machine resources, including physical memory[cite: 6].
+- **Task:** Implement and maintain a list of free physical memory pages.
+  - The MIPS machine has 64 physical pages (ppn range 0-63), configurable via `nachos.conf`[cite: 1, 6]. Get this value using `Machine.processor().getNumPhysPages()`[cite: 6, 91].
+  - A `LinkedList<Integer>` is suggested for tracking free physical page numbers (ppn)[cite: 6, 83].
+  - Ensure synchronized access to this list if accessed concurrently[cite: 84].
 
-### 2. File System Calls
+### 3.2. `SynchConsole.java` [cite: 6, 23]
 
-- **Implementation in `UserProcess.java`**:
-  - Create a per-process open file table (array of OpenFile, maximum 16 entries)
-  - Reserve first two entries for standard input/output:
-    - Entry 0: `UserKernel.console.openForReading()` (stdin)
-    - Entry 1: `UserKernel.console.openForWriting()` (stdout)
-  - Implement system calls by completing each handler method:
-    - `handleCreate(int namePtr)` - Create a file
-    - `handleOpen(int namePtr)` - Open a file
-    - `handleRead(int fileDescriptor, int bufferPtr, int count)` - Read from a file
-    - `handleWrite(int fileDescriptor, int bufferPtr, int count)` - Write to a file
-    - `handleClose(int fileDescriptor)` - Close a file
-    - `handleUnlink(int namePtr)` - Remove a file
-  - The file descriptor returned by open/create is an index into the process file table
-  - Handle all error conditions gracefully, returning -1 on error
+- **Purpose:** Provides synchronized access to the console for multiple threads/processes[cite: 23].
+- **Task:** Modify locking for console output.
+  - Remove `writelock.acquire()` and `writelock.release()` from the `writeByte()` method.
+  - Add `writelock.acquire()` and `writelock.release()` to protect the `for`-loop within the `write()` method to prevent interleaved output from different processes[cite: 6].
 
-### 3. Virtual Memory Management
+### 3.3. `UserProcess.java` [cite: 6, 22]
 
-- **Modify `readVirtualMemory()` and `writeVirtualMemory()`**:
-  - Update to translate virtual addresses to physical addresses
-  - Use the process page table for address translation
-  - Handle transfers that cross page boundaries
-  
-- **Update `loadSections()`**:
-  - Acquire free physical pages from the global free page list
-  - Load program sections into appropriate physical pages
-  - Set up the process page table with correct mappings
-  - Mark read-only pages appropriately using `CoffSection.isReadOnly()`
-  - Allocate 8 pages for stack plus 1 for arguments (9 pages total)
-  - Return error if not enough physical memory is available
+- **Purpose:** Manages a user process's address space, loads programs, and handles system calls[cite: 22]. This file requires the most modifications[cite: 6].
+- **Tasks:**
 
-- **Implement `unloadSections()`**:
-  - Free all physical pages used by the process
-  - Return pages to the free page list
+  - **A. Fields and Constructor:**
 
-### 4. Implement Process Control System Calls
+    - Implement a **Process File Table**:
+      - Define a private 1D array (e.g., `OpenFile[] fileTable`) of size 16 to store open files for the process[cite: 2, 6, 73].
+      - Maintain a corresponding status array (e.g., `boolean[] fileStatus`) to track used slots.
+      - The first two slots (index 0 and 1) are reserved for standard input and standard output[cite: 2, 6, 64].
+        - `fileTable[0]`: Standard Input (Keyboard). Initialize using `UserKernel.console.openForReading()`[cite: 2, 6, 65].
+        - `fileTable[1]`: Standard Output (Console). Initialize using `UserKernel.console.openForWriting()`[cite: 2, 6, 65].
+      - File descriptors returned by `creat` and `open` will be indices into this table (0-15)[cite: 6, 75].
 
-- **Process Management**:
-  - Assign a unique process ID to each process (static counter)
-  - Track parent-child relationships between processes
-  
-- **Implement Remaining System Calls**:
-  - `handleExec(int fileNamePtr, int argc, int argvPtr)` - Start a new process
-  - `handleJoin(int processID, int statusPtr)` - Wait for a child process
-  - `handleExit(int status)` - Terminate the current process
-  - `handleHalt()` - Shut down the system (only allowed for root process)
+  - **B. `handleSyscall()` Method:**
 
-- **Process Exit Behavior**:
-  - Close all open files
-  - Free all memory resources
-  - Transfer exit status to parent process (for join)
-  - If this is the last process, call `Machine.halt()` directly
+    - Implement cases for the 10 required system calls. Branch each case to a specific `handle<SyscallName>()` method[cite: 6].
+    - Refer to `test/syscall.h` for argument lists, functionality, and return value definitions for each system call[cite: 4, 6, 49, 63].
+    - **Recommended Implementation Order:**
 
-### 5. Modifications to SynchConsole.java
+      1.  `handleCreate(int namePtr)`[cite: 4, 6]: Create/truncate a file. Return file descriptor or -1 on error[cite: 62]. Use `ThreadedKernel.fileSystem.open(filename, true)`[cite: 3, 67]. Handle potential errors like invalid pointers or filenames[cite: 53, 54, 55].
+      2.  `handleOpen(int namePtr)`[cite: 4, 6]: Open an existing file. Return file descriptor or -1 on error[cite: 62]. Use `ThreadedKernel.fileSystem.open(filename, false)`[cite: 3, 67].
+      3.  `handleRead(int fd, int bufferPtr, int count)`[cite: 4, 6]: Read from file/console into user buffer. Return bytes read or -1 on error. Use `OpenFile.read()`[cite: 3]. Requires virtual memory translation (`readVirtualMemory` / `writeVirtualMemory`)[cite: 59].
+      4.  `handleWrite(int fd, int bufferPtr, int count)`[cite: 4, 6]: Write from user buffer to file/console. Return bytes written or -1 on error. Use `OpenFile.write()`[cite: 3]. Requires virtual memory translation (`readVirtualMemory` / `writeVirtualMemory`)[cite: 59].
+      5.  `handleClose(int fd)`[cite: 4, 6]: Close an open file descriptor. Release the slot in the file table. Use `OpenFile.close()`.
+      6.  `handleUnlink(int namePtr)`[cite: 4, 6]: Delete a file. Use `ThreadedKernel.fileSystem.remove(filename)`[cite: 3, 67].
+      7.  `handleExec(int filePtr, int argc, int argvPtr)`[cite: 6, 99]: Load and execute a new program. Allocate memory, load sections, create a new thread (`UThread`), and run it. Return the new process ID (PID) or -1 on error[cite: 109].
+      8.  `handleJoin(int processID, int statusPtr)`[cite: 6, 99]: Wait for a child process to exit. Return child's exit status. Only the parent can join a child[cite: 107]. Write status to `statusPtr` using `writeVirtualMemory`[cite: 101].
+      9.  `handleExit(int status)`[cite: 6, 99]: Terminate the current process. Free resources (memory, files) using `unloadSections()`, notify the parent if joined, store exit status[cite: 114, 115]. If this is the last process, halt the machine (`Machine.halt()`)[cite: 117, 118].
+      10. `handleHalt()`[cite: 6]: Halt the Nachos machine (`Machine.halt()`). Should only be invokable by the initial "root" process[cite: 57]. Ignore calls from other processes[cite: 58].
 
-- Remove `writelock.acquire()` and `writelock.release()` from the `writeByte()` method
-- Add them to protect the for-loop in the `write()` method to prevent fragmented console output
+    - **Argument Handling:** System call arguments are passed via registers (`a0` to `a3`). Virtual addresses (pointers) passed as arguments need translation using `readVirtualMemory` or `readVirtualMemoryString`[cite: 6, 59, 101]. String arguments are null-terminated and have a max length of 256 bytes[cite: 60, 61].
+    - **Error Handling:** Return -1 for errors[cite: 62]. Ensure user errors don't crash the kernel[cite: 53, 54, 55, 56].
 
-## Implementation Sequence
+  - **C. `execute()` Method:**
 
-For a logical development approach, implement the system in the following stages:
+    - May require slight modifications when implementing `handleExec` and `handleExit`[cite: 6].
 
-1. **Stage 1**: Implement file system calls
-   - Create, Open, Read, Write handlers
-   - Set up the process file table
+  - **D. `readVirtualMemory()` and `writeVirtualMemory()` Methods:**
 
-2. **Stage 2**: Implement virtual memory management
-   - Update memory translation functions
-   - Modify loadSections() for page allocation
+    - Modify the second version of each method to support paging[cite: 6].
+    - **Goal:** Translate virtual addresses (vaddr) provided by the user process to physical addresses (paddr) using the process's `pageTable` before accessing physical memory (`Machine.processor().getMemory()`)[cite: 6, 89, 90].
+    - The `pageTable` is an array of `TranslationEntry` objects[cite: 3, 92]. Use `vpn` (virtual page number) to index the table and get the `ppn` (physical page number)[cite: 5]. Check the `valid` bit.
+    - Handle data transfers that **cross page boundaries**. A contiguous virtual memory range might map to non-contiguous physical pages[cite: 6]. You'll likely need to break the transfer into page-sized (or smaller) chunks.
+    - Use `System.arraycopy()` correctly with translated physical addresses.
+    - Set the `readOnly` flag in `TranslationEntry` based on the COFF section's properties (`CoffSection.isReadOnly()`) during loading[cite: 92, 93].
+    - These methods should return the number of bytes successfully transferred, not throw exceptions on failure[cite: 94].
 
-3. **Stage 3**: Implement Close and Unlink system calls
+  - **E. `loadSections()` Method:**
 
-4. **Stage 4**: Implement process management system calls
-   - Exec, Join, Exit, Halt handlers
-   - Process tracking and cleanup
+    - **Purpose:** Allocate physical memory pages for a new process and load the program's code and data sections into them[cite: 6, 95].
+    - **Steps:**
+      1.  Determine `numPages` required (program sections + stack (8 pages) + arguments (1 page))[cite: 6, 82].
+      2.  Check if enough free physical pages are available using the free list maintained in `UserKernel`. If not, report an error (e.g., return `false`)[cite: 6, 97].
+      3.  Allocate `numPages` from the free list[cite: 6, 85]. Your allocation should be able to use non-contiguous free pages ("gaps")[cite: 86, 87].
+      4.  Load program sections: Iterate through the COFF sections. For each page in a section:
+          - Get a free physical page number (ppn) from your allocated list.
+          - Call `section.loadPage(vpn, ppn)` to load the virtual page `vpn` into the physical page `ppn`[cite: 6].
+          - Update the process's `pageTable` entry for `vpn` with the corresponding `ppn`, set `valid` to true, and set `readOnly` if necessary[cite: 6, 92, 93].
+      5.  Allocate pages for the stack and arguments: Get 9 more free ppns. Map the corresponding virtual pages (typically at the end of the virtual address space) to these ppns in the `pageTable`, marking them as valid and writable[cite: 6].
+    - **Remove Old Code:** Delete or comment out the loop in the `UserProcess` constructor that initially assigned all physical pages to the single process. `loadSections` is now responsible for page allocation[cite: 6].
 
-## Testing Your Implementation
+  - **F. `unloadSections()` Method:**
+    - **Purpose:** Free all resources held by a process when it exits (`handleExit` should call this)[cite: 6, 114].
+    - **Task:** Iterate through the process's `pageTable`. For every valid entry, add the corresponding physical page number (`ppn`) back to the global free page list in `UserKernel`[cite: 6, 88].
 
-The autograder will test your implementation in stages:
+## 4. Testing Strategy
 
-1. **File system calls**: Create, Open, Read, Write graders
-2. **Paging system**: Read Grader 3, Write Grader 3
-3. **Additional file system**: Read Grader 2, Write Grader 2, Close Grader 1/2, Unlink 1
-4. **Process management**: Halt, Exec, Join, Exit graders
+Follow the suggested testing stages:
 
-Run final tests with both `gradep3` and `haltgrader`.
+- **Stage 1 (File System Calls - No Paging Needed):** [cite: 6]
+  - `Create Grader 1`: Test `handleCreate`. Check file creation, truncation, and invalid argument handling.
+  - `Open Grader 1`: Test `handleOpen` for existing files.
+  - `Read Grader 1`: Test `handleRead` from a file to the console.
+  - `Write Grader 1`: Test `handleWrite` from the console to a file.
+- **Stage 2 (Paging):** [cite: 6]
+  - `Read Grader 3`: Tests `writeVirtualMemory` by having the kernel write a large array (spanning >1 page) to user memory, which is then printed. Verifies `a[i] == i`.
+  - `Write Grader 3`: Tests `readVirtualMemory` by having the kernel read a large array from user memory and write it to a file.
+- **Stage 3 (File System Robustness - Paging Needed):** [cite: 6]
+  - `Read Grader 2`, `Write Grader 2`: Test invalid arguments for read/write.
+  - `Close Grader 1`, `Close Grader 2`: Test `handleClose` and file descriptor reuse.
+  - `Unlink 1`: Test `handleUnlink`.
+  - _(Assumes max 16 open files: 2 stdio + 14 regular)_
+- **Stage 4 (Process Management - Paging Needed):** [cite: 6]
 
-## Debugging Tips
+  - `Halt Grader 1`: Test `handleHalt`.
+  - `Exec Grader 1`, `Exec Grader 2`: Test `handleExec`.
+  - `Join Grader 1`, `Join Grader 2`, `Join Grader 3`: Test `handleJoin`.
+  - `Exit Grader 1`, `Exit Grader 2`: Test `handleExit`.
 
-- Print temporary information using `System.out.println()`
-- Add debug statements in `handleSyscall()` to track system call numbers and arguments
-- Build skeleton code for all handlers first, returning -1 for unimplemented features
-- For memory debugging, test with Read Grader 3 and Write Grader 3
+- **Final Testing:** Run `gradep3` (combines most graders) and `haltgrader` separately.
 
-## Requirements Checklist
+## 5. Debugging Hints
 
-- [ ] `UserKernel.java`: Global free page list and management
-- [ ] `SynchConsole.java`: Modified synchronization in write methods
-- [ ] `UserProcess.java`: Open file table (16 entries)
-- [ ] `UserProcess.java`: File system calls (6 handlers)
-- [ ] `UserProcess.java`: Modified virtual memory access methods
-- [ ] `UserProcess.java`: Updated section loading with page allocation
-- [ ] `UserProcess.java`: Process management system calls (3 handlers)
-- [ ] `UserProcess.java`: Process cleanup on exit
-
-## Common Pitfalls to Avoid
-
-- Not protecting shared resources with synchronization
-- Failing to handle cross-page memory transfers
-- Not properly initializing file descriptors 0 and 1
-- Improper handling of errors in system calls
-- Memory leaks when processes exit
-- Not updating page tables correctly during address translation
-- Failing to bullet-proof against invalid user inputs
-
-Remember that proper error handling is crucial - user programs should never be able to crash the kernel.
+- Use `System.out.println()` extensively, especially within `handleSyscall` to see which syscall number and arguments (`a0`-`a3`) are being passed by the graders.
+- Initially, stub out all `handle<SyscallName>()` methods to return -1 until you implement them fully. This helps isolate issues during testing.
