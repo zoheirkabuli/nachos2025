@@ -38,19 +38,12 @@ public class Alarm {
      * that should be run.
      */
     public void timerInterrupt() {
-	
 	long currentTime = Machine.timer().getTime();
-	
-	boolean intStatus = Machine.interrupt().disable();
 	
 	while (!waitingThreads.isEmpty() && waitingThreads.peek().wakeTime <= currentTime) {
 	    WaitingThread wt = waitingThreads.poll();
 	    wt.thread.ready();
 	}
-	
-	Machine.interrupt().restore(intStatus);
-	
-	KThread.currentThread().yield();
     }
 
     /**
@@ -68,21 +61,22 @@ public class Alarm {
      * @see	nachos.machine.Timer#getTime()
      */
     public void waitUntil(long x) {
-	
-	long wakeTime = Machine.timer().getTime() + x;
-	
 	if (x <= 0)
 	    return;
 	
-	boolean intStatus = Machine.interrupt().disable();
+	long wakeTime = Machine.timer().getTime() + x;
 	
-	WaitingThread wt = new WaitingThread(KThread.currentThread(), wakeTime);
-	
-	waitingThreads.add(wt);
-	
-	KThread.sleep();
-	
-	Machine.interrupt().restore(intStatus);
+	// Check if wakeTime is greater than current time
+	if (wakeTime > Machine.timer().getTime()) {
+	    boolean intStatus = Machine.interrupt().disable();
+	    
+	    WaitingThread wt = new WaitingThread(KThread.currentThread(), wakeTime);
+	    waitingThreads.add(wt);
+	    
+	    KThread.sleep();
+	    
+	    Machine.interrupt().restore(intStatus);
+	}
     }
     
     private class WaitingThread {

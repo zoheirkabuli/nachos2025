@@ -10,18 +10,26 @@ import nachos.machine.*;
  * threads can be paired off at this point.
  */
 public class Communicator {
+    private Lock lock;
+    private Condition2 speakerCondition;
+    private Condition2 listenerCondition;
+    
+    private int word;
+    private boolean wordAvailable;
+    private int waitingSpeakers;
+    private int waitingListeners;
+
     /**
      * Allocate a new communicator.
      */
     public Communicator() {
         lock = new Lock();
-        speakerWaiting = new Condition2(lock);
-        listenerWaiting = new Condition2(lock);
-        wordReady = new Condition2(lock);
+        speakerCondition = new Condition2(lock);
+        listenerCondition = new Condition2(lock);
         
-        hasWord = false;
-        speakerCount = 0;
-        listenerCount = 0;
+        wordAvailable = false;
+        waitingSpeakers = 0;
+        waitingListeners = 0;
     }
 
     /**
@@ -37,28 +45,20 @@ public class Communicator {
     public void speak(int word) {
         lock.acquire();
         
-        speakerCount++;
+        waitingSpeakers++;
         
-        while (hasWord) {
-            speakerWaiting.sleep();
+        // Wait until no word is available AND a listener is ready
+        while (wordAvailable || waitingListeners == 0) {
+            speakerCondition.sleep();
         }
         
+        // Transfer the word
         this.word = word;
-        hasWord = true;
+        wordAvailable = true;
+        waitingSpeakers--;
         
-        if (listenerCount > 0) {
-            listenerWaiting.wake();
-        }
-        
-        while (hasWord) {
-            wordReady.sleep();
-        }
-        
-        speakerCount--;
-        
-        if (speakerCount > 0) {
-            speakerWaiting.wake();
-        }
+        // Wake up the listener that we paired with
+        listenerCondition.wake();
         
         lock.release();
     }
@@ -72,41 +72,27 @@ public class Communicator {
     public int listen() {
         lock.acquire();
         
-        listenerCount++;
+        waitingListeners++;
         
-        while (!hasWord) {
-            
-            if (speakerCount > 0) {
-                speakerWaiting.wake();
-            }
-            
-            listenerWaiting.sleep();
+        // If no word is ready, wake a speaker if one is waiting
+        if (!wordAvailable) {
+            speakerCondition.wake();
         }
         
+        // Wait until a word is available
+        while (!wordAvailable) {
+            listenerCondition.sleep();
+        }
+        
+        // Receive the word
         int receivedWord = this.word;
+        wordAvailable = false;
+        waitingListeners--;
         
-        hasWord = false;
-        
-        wordReady.wake();
-        
-        listenerCount--;
-        
-        if (listenerCount > 0) {
-            listenerWaiting.wake();
-        }
+        // Wake the next speaker, if any (handles case where multiple speakers arrived before listener)
+        speakerCondition.wake();
         
         lock.release();
-        
         return receivedWord;
     }
-    
-    private Lock lock;
-    private Condition2 speakerWaiting;
-    private Condition2 listenerWaiting;
-    private Condition2 wordReady;
-    
-    private int word;
-    private boolean hasWord;
-    private int speakerCount;
-    private int listenerCount;
 }
